@@ -1,0 +1,5 @@
+vllm>=0.18.0
+transformers
+numpy
+matplotlib
+accelerate
