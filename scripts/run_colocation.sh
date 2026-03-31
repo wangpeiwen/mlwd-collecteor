@@ -11,8 +11,8 @@
 
 set -e
 
-QWEN=${1:-"/data/Qwen/Qwen2.5-7B-Instruct"}
-LLAMA=${2:-"/data/Llama-3.2-3B"}
+QWEN=${1:-"/data/Qwen2.5-7B-Instruct"}
+LLAMA=${2:-"/data/LLM-Research/Llama-3.2-3B-Instruct"}
 NUM_RUNS=5
 WARMUP=2
 
