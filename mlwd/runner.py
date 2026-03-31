@@ -5,9 +5,10 @@ from transformers import AutoTokenizer
 
 
 def load_model(model: str, quantization: str = "fp16", tp: int = 1):
+    os.environ["VLLM_USE_V1"] = "0"
     from vllm import LLM
     llm = LLM(model=model, dtype="float16", tensor_parallel_size=tp,
-              trust_remote_code=True, enforce_eager=True, max_model_len=2048)
+              trust_remote_code=True, enforce_eager=True)
     tokenizer = AutoTokenizer.from_pretrained(model, trust_remote_code=True)
     return llm, tokenizer
 

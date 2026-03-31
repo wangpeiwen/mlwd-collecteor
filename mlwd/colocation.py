@@ -1,154 +1,30 @@
-"""共置干扰实验：两模型同卡运行，测量真实 α_p 和 α_d。
+"""共置干扰实验 v3：单进程双 vLLM 引擎方案。
 
-需要 NVIDIA MPS (Multi-Process Service) 支持同卡多进程共享 GPU。
-实验流程：
-  1. 启动 MPS daemon
-  2. 进程 A 运行 victim (decode)，进程 B 运行 aggressor (prefill)
-  3. 分别测量单独运行和共置运行的时延
-  4. 计算 α_d = (T_coloc - T_baseline) / T_baseline
+设计原则：
+  - 同一进程中加载两个 vLLM LLM() 实例，共享 GPU 显存
+  - 先加载小模型 (aggressor, util=0.28)，再加载大模型 (victim, util=0.85)
+  - vLLM 第二个实例会基于剩余显存计算 KV cache pool，不会 OOM
+  - Aggressor 在后台线程持续调用 llm.generate() 制造真实推理干扰
+
+显存预算 (V100-32GB):
+  Phase 1: vLLM victim only (util=0.90) → baseline 测量
+  Phase 2: vLLM aggressor (Llama 3B, util=0.28 ~9GB)
+         + vLLM victim (Qwen 7B, util=0.85 ~22GB 剩余空间) → 共置测量
+  Phase 3: vLLM aggressor only (util=0.90) → baseline 测量
 
 Usage:
-    # 先启动 MPS
-    nvidia-cuda-mps-control -d
-
-    # 运行共置实验
     python -m mlwd.colocation \\
-        --victim /data/Qwen/Qwen2.5-7B-Instruct \\
-        --aggressor /data/Llama-3.2-3B \\
+        --victim /data/Qwen2.5-7B-Instruct \\
+        --aggressor /data/LLM-Research/Llama-3.2-3B-Instruct \\
         --gpu 0 --output output/colocation.json
-
-    # 双卡并行（卡0和卡1各跑一组，角色互换）
-    python -m mlwd.colocation \\
-        --victim /data/Qwen/Qwen2.5-7B-Instruct \\
-        --aggressor /data/Llama-3.2-3B \\
-        --gpu 0 --output output/colocation_0.json &
-    python -m mlwd.colocation \\
-        --victim /data/Llama-3.2-3B \\
-        --aggressor /data/Qwen/Qwen2.5-7B-Instruct \\
-        --gpu 1 --output output/colocation_1.json &
 """
 
-import argparse, json, os, time, sys
-import multiprocessing as mp
+import argparse, json, os, time, threading, gc
 from itertools import product
 from pathlib import Path
 
 from .config import Experiment, OUTPUT_DIR, DEFAULT_BATCH_SIZES, DEFAULT_SEQ_LENGTHS
 
-
-# ── 子进程工作函数 ──────────────────────────────────────
-
-def _worker_run(model_path, prompts_data, max_tokens, num_runs, warmup,
-                gpu_id, result_queue, barrier, role, max_model_len=2048,
-                gpu_mem_util=0.45):
-    """在子进程中加载模型并运行推理。"""
-    os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
-
-    from vllm import LLM, SamplingParams
-    from transformers import AutoTokenizer
-
-    llm = LLM(model=model_path, dtype="float16", trust_remote_code=True,
-              enforce_eager=True, gpu_memory_utilization=gpu_mem_util,
-              max_model_len=max_model_len)
-    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
-
-    sp = SamplingParams(max_tokens=max_tokens, temperature=0)
-    prompts = prompts_data
-
-    # warmup
-    for _ in range(warmup):
-        llm.generate(prompts, sp)
-
-    # 同步：等待两个进程都 warmup 完毕
-    barrier.wait()
-
-    # 测量
-    latencies = []
-    for _ in range(num_runs):
-        t0 = time.perf_counter()
-        llm.generate(prompts, sp)
-        latencies.append((time.perf_counter() - t0) * 1000.0)
-
-    latencies.sort()
-    mid = len(latencies) // 2
-    median = latencies[mid] if len(latencies) % 2 else (latencies[mid-1] + latencies[mid]) / 2
-
-    result_queue.put({
-        "role": role,
-        "median_ms": median,
-        "all_ms": latencies,
-    })
-
-
-def _make_prompts(model_path, seq_len, batch_size):
-    """构造 prompts（在主进程中执行，避免子进程重复加载 tokenizer）。"""
-    from transformers import AutoTokenizer
-    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
-    text = "hello " * (seq_len * 2)
-    ids = tokenizer.encode(text)[:seq_len]
-    prompt = tokenizer.decode(ids)
-    return [prompt] * batch_size
-
-
-# ── 单独运行基线 ──────────────────────────────────────
-
-def measure_baseline(model_path, prompts, max_tokens, num_runs, warmup, gpu_id,
-                     max_model_len=2048):
-    """单模型单独运行，测量基线时延。"""
-    result_queue = mp.Queue()
-    barrier = mp.Barrier(1)
-
-    p = mp.Process(target=_worker_run,
-                   args=(model_path, prompts, max_tokens, num_runs, warmup,
-                         gpu_id, result_queue, barrier, "baseline",
-                         max_model_len, 0.90))
-    p.start()
-    p.join(timeout=600)
-    if p.is_alive():
-        p.terminate()
-        return None
-    if result_queue.empty():
-        return None
-    return result_queue.get()
-
-
-# ── 共置运行 ──────────────────────────────────────
-
-def measure_colocation(victim_model, victim_prompts, victim_max_tokens,
-                       aggressor_model, aggressor_prompts, aggressor_max_tokens,
-                       num_runs, warmup, gpu_id, max_model_len=2048):
-    """两模型同卡共置运行。"""
-    result_queue = mp.Queue()
-    barrier = mp.Barrier(2)
-
-    p_victim = mp.Process(
-        target=_worker_run,
-        args=(victim_model, victim_prompts, victim_max_tokens,
-              num_runs, warmup, gpu_id, result_queue, barrier, "victim",
-              max_model_len, 0.45))
-    p_aggressor = mp.Process(
-        target=_worker_run,
-        args=(aggressor_model, aggressor_prompts, aggressor_max_tokens,
-              num_runs, warmup, gpu_id, result_queue, barrier, "aggressor",
-              max_model_len, 0.45))
-
-    p_victim.start()
-    p_aggressor.start()
-    p_victim.join(timeout=600)
-    p_aggressor.join(timeout=600)
-
-    for p in [p_victim, p_aggressor]:
-        if p.is_alive():
-            p.terminate()
-
-    results = {}
-    while not result_queue.empty():
-        r = result_queue.get()
-        results[r["role"]] = r
-    return results
-
-
-# ── 保存/加载 ──────────────────────────────────────
 
 def _save(path, data):
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
@@ -160,130 +36,268 @@ def _load(path):
     if os.path.exists(path):
         with open(path) as f:
             return json.load(f)
-    return []
+    return {}
 
 
-# ── 主实验循环 ──────────────────────────────────────
+def _median(lats):
+    lats = sorted(lats)
+    mid = len(lats) // 2
+    return lats[mid] if len(lats) % 2 else (lats[mid - 1] + lats[mid]) / 2
+
+
+def _free_gpu():
+    import torch
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+
+
+# ── Phase 1 & 3: 单模型 baseline ──────────────────────
+
+def measure_baselines(model_path, batch_sizes, seq_lengths, max_tokens,
+                      num_runs, warmup, mode="decode"):
+    """单模型 vLLM baseline，独占 GPU。"""
+    os.environ["VLLM_USE_V1"] = "0"
+    from vllm import LLM, SamplingParams
+    from transformers import AutoTokenizer
+
+    print(f"  Loading {Path(model_path).name} (vLLM, util=0.90)...")
+    llm = LLM(model=model_path, dtype="float16", trust_remote_code=True,
+              enforce_eager=True, gpu_memory_utilization=0.90)
+    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+
+    results = {}
+    for b, s in product(batch_sizes, seq_lengths):
+        key = f"b{b}_s{s}"
+        if mode == "decode":
+            prompts = ["The"] * b
+            sp = SamplingParams(max_tokens=max_tokens, temperature=0)
+        else:
+            text = "hello " * (s * 2)
+            ids = tokenizer.encode(text)[:s]
+            prompt = tokenizer.decode(ids)
+            prompts = [prompt] * b
+            sp = SamplingParams(max_tokens=1, temperature=0)
+
+        for _ in range(warmup):
+            llm.generate(prompts, sp)
+
+        lats = []
+        for _ in range(num_runs):
+            t0 = time.perf_counter()
+            llm.generate(prompts, sp)
+            lats.append((time.perf_counter() - t0) * 1000.0)
+
+        med = _median(lats)
+        results[key] = {"median_ms": med, "all_ms": sorted(lats)}
+        print(f"    {key} ({mode}): {med:.1f} ms")
+
+    del llm
+    _free_gpu()
+    print("  Model unloaded.\n")
+    return results
+
+
+# ── Phase 2: 双 vLLM 共置 ──────────────────────────────
+
+class VllmAggressor:
+    """后台线程持续调用 vLLM aggressor 推理，制造真实干扰。"""
+
+    def __init__(self, llm, tokenizer):
+        self.llm = llm
+        self.tokenizer = tokenizer
+        self._stop = threading.Event()
+        self._thread = None
+
+    def start(self, batch_size, seq_len):
+        from vllm import SamplingParams
+        text = "hello " * (seq_len * 2)
+        ids = self.tokenizer.encode(text)[:seq_len]
+        prompt = self.tokenizer.decode(ids)
+        prompts = [prompt] * batch_size
+        sp = SamplingParams(max_tokens=1, temperature=0)
+
+        self._stop.clear()
+        self._thread = threading.Thread(
+            target=self._loop, args=(prompts, sp), daemon=True)
+        self._thread.start()
+
+    def _loop(self, prompts, sp):
+        while not self._stop.is_set():
+            try:
+                self.llm.generate(prompts, sp)
+            except Exception:
+                break
+
+    def stop(self):
+        if self._thread:
+            self._stop.set()
+            self._thread.join(timeout=60)
+            self._thread = None
+
+
+def measure_colocation(victim_model_path, aggressor_model_path,
+                       batch_sizes, seq_lengths, max_tokens,
+                       num_runs, warmup,
+                       aggressor_util=0.28, victim_util=0.85):
+    """Phase 2: 同进程加载两个 vLLM 引擎，先小后大。"""
+    os.environ["VLLM_USE_V1"] = "0"
+    from vllm import LLM, SamplingParams
+    from transformers import AutoTokenizer
+
+    # 先加载小模型 (aggressor)
+    print(f"  Loading aggressor {Path(aggressor_model_path).name} (vLLM, util={aggressor_util})...")
+    llm_a = LLM(model=aggressor_model_path, dtype="float16", trust_remote_code=True,
+                enforce_eager=True, gpu_memory_utilization=aggressor_util)
+    tok_a = AutoTokenizer.from_pretrained(aggressor_model_path, trust_remote_code=True)
+
+    # 再加载大模型 (victim)，vLLM 会基于剩余显存分配 KV cache
+    print(f"  Loading victim {Path(victim_model_path).name} (vLLM, util={victim_util})...")
+    llm_v = LLM(model=victim_model_path, dtype="float16", trust_remote_code=True,
+                enforce_eager=True, gpu_memory_utilization=victim_util)
+
+    aggressor = VllmAggressor(llm_a, tok_a)
+    print(f"  Both models loaded. Starting co-location...\n")
+
+    results = {}
+    total = len(batch_sizes) ** 2 * len(seq_lengths) ** 2
+    idx = 0
+
+    for b_v, s_v in product(batch_sizes, seq_lengths):
+        v_prompts = ["The"] * b_v
+        v_sp = SamplingParams(max_tokens=max_tokens, temperature=0)
+
+        for b_a, s_a in product(batch_sizes, seq_lengths):
+            idx += 1
+            key = f"v{b_v}x{s_v}_a{b_a}x{s_a}"
+            print(f"  [{idx}/{total}] {key}...", end=" ", flush=True)
+
+            # 启动 aggressor 后台推理
+            aggressor.start(b_a, s_a)
+            time.sleep(0.5)
+
+            # warmup victim
+            for _ in range(warmup):
+                llm_v.generate(v_prompts, v_sp)
+
+            # 测量
+            lats = []
+            for _ in range(num_runs):
+                t0 = time.perf_counter()
+                llm_v.generate(v_prompts, v_sp)
+                lats.append((time.perf_counter() - t0) * 1000.0)
+
+            aggressor.stop()
+
+            med = _median(lats)
+            results[key] = {
+                "victim_b": b_v, "victim_s": s_v,
+                "aggressor_b": b_a, "aggressor_s": s_a,
+                "victim_coloc_ms": med, "all_ms": sorted(lats),
+            }
+            print(f"{med:.1f} ms")
+
+    del llm_v, llm_a
+    aggressor.stop()
+    _free_gpu()
+    print("  Both models unloaded.\n")
+    return results
+
+
+# ── 主流程 ──────────────────────────────────────────────
 
 def run_experiment(victim_model, aggressor_model, gpu_id, output_path,
                    batch_sizes=None, seq_lengths=None,
                    num_runs=5, warmup=2, max_tokens=32):
-    """运行完整共置实验矩阵。
-
-    对每个 (b_v, s_v, b_a, s_a) 组合：
-    - victim 运行 decode（max_tokens 个 token）
-    - aggressor 运行 prefill（max_tokens=1）
-    - 测量 baseline 和 colocation 时延
-    - 计算 α_d 和 α_p
-    """
     if batch_sizes is None:
         batch_sizes = DEFAULT_BATCH_SIZES
     if seq_lengths is None:
         seq_lengths = DEFAULT_SEQ_LENGTHS
 
-    results = _load(output_path)
-    done_keys = {r["key"] for r in results}
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+    data = _load(output_path)
 
-    # 预构造 prompts
-    print("Preparing prompts...")
-    victim_prompts_cache = {}
-    aggressor_prompts_cache = {}
-    for b, s in product(batch_sizes, seq_lengths):
-        victim_prompts_cache[(b, s)] = ["The"] * b  # decode: 短 prompt + 长输出
-        aggressor_prompts_cache[(b, s)] = _make_prompts(aggressor_model, s, b)
+    v_name = Path(victim_model).name
+    a_name = Path(aggressor_model).name
+    n_configs = len(batch_sizes) * len(seq_lengths)
 
-    total = len(batch_sizes) * len(seq_lengths)
-    total_pairs = total * total
-    print(f"Experiment matrix: {total} victim configs × {total} aggressor configs = {total_pairs} pairs")
-    print(f"GPU: {gpu_id}, num_runs: {num_runs}\n")
+    print(f"{'='*60}")
+    print(f"  Victim:     {v_name} (decode)")
+    print(f"  Aggressor:  {a_name} (prefill)")
+    print(f"  GPU: {gpu_id}, configs: {n_configs}, pairs: {n_configs**2}")
+    print(f"  Runs: {num_runs}, Warmup: {warmup}, Max tokens: {max_tokens}")
+    print(f"{'='*60}\n")
 
-    idx = 0
-    for b_v, s_v in product(batch_sizes, seq_lengths):
-        # 先测 victim baseline（decode）
-        bl_key = f"baseline_victim_b{b_v}_s{s_v}"
-        baseline_victim = None
-        for r in results:
-            if r.get("key") == bl_key:
-                baseline_victim = r.get("victim_baseline_ms")
-                break
+    # Phase 1: Victim baseline (独占 GPU)
+    if "victim_baselines" not in data:
+        print("Phase 1/3: Victim baseline (vLLM, full GPU)")
+        data["victim_baselines"] = measure_baselines(
+            victim_model, batch_sizes, seq_lengths, max_tokens,
+            num_runs, warmup, mode="decode")
+        data["victim_model"] = v_name
+        _save(output_path, data)
+    else:
+        print("Phase 1/3: Victim baseline (cached)\n")
 
-        if baseline_victim is None:
-            print(f"[Baseline] victim decode b={b_v},s={s_v}...")
-            v_prompts = victim_prompts_cache[(b_v, s_v)]
-            bl = measure_baseline(victim_model, v_prompts, max_tokens,
-                                  num_runs, warmup, gpu_id)
-            if bl:
-                baseline_victim = bl["median_ms"]
-                results.append({"key": bl_key, "victim_baseline_ms": baseline_victim,
-                                "all_ms": bl["all_ms"]})
-                _save(output_path, results)
-                print(f"  baseline = {baseline_victim:.2f} ms")
-            else:
-                print(f"  FAILED, skipping")
-                continue
+    # Phase 2: Co-location (双 vLLM 引擎)
+    if "colocation" not in data:
+        print("Phase 2/3: Co-location (dual vLLM engines)")
+        data["colocation"] = measure_colocation(
+            victim_model, aggressor_model,
+            batch_sizes, seq_lengths, max_tokens,
+            num_runs, warmup)
+        _save(output_path, data)
+    else:
+        print("Phase 2/3: Co-location (cached)\n")
 
-        for b_a, s_a in product(batch_sizes, seq_lengths):
-            idx += 1
-            key = f"coloc_v{b_v}x{s_v}_a{b_a}x{s_a}"
-            if key in done_keys:
-                print(f"[{idx}/{total_pairs}] {key} SKIP (cached)")
-                continue
+    # Phase 3: Aggressor baseline (独占 GPU)
+    if "aggressor_baselines" not in data:
+        print("Phase 3/3: Aggressor baseline (vLLM, full GPU)")
+        data["aggressor_baselines"] = measure_baselines(
+            aggressor_model, batch_sizes, seq_lengths, max_tokens=1,
+            num_runs=num_runs, warmup=warmup, mode="prefill")
+        data["aggressor_model"] = a_name
+        _save(output_path, data)
+    else:
+        print("Phase 3/3: Aggressor baseline (cached)\n")
 
-            print(f"[{idx}/{total_pairs}] {key}...")
+    # 计算 α_d
+    print("Computing interference coefficients...")
+    pairs = []
+    for key, coloc in data["colocation"].items():
+        b_v, s_v = coloc["victim_b"], coloc["victim_s"]
+        b_a, s_a = coloc["aggressor_b"], coloc["aggressor_s"]
 
-            # 测 aggressor baseline（prefill）
-            a_prompts = aggressor_prompts_cache[(b_a, s_a)]
-            bl_a = measure_baseline(aggressor_model, a_prompts, 1,
-                                    num_runs, warmup, gpu_id)
-            baseline_aggressor = bl_a["median_ms"] if bl_a else None
+        bl_v = data["victim_baselines"].get(f"b{b_v}_s{s_v}", {}).get("median_ms")
+        coloc_v = coloc["victim_coloc_ms"]
 
-            # 共置运行
-            v_prompts = victim_prompts_cache[(b_v, s_v)]
-            coloc = measure_colocation(
-                victim_model, v_prompts, max_tokens,
-                aggressor_model, a_prompts, 1,
-                num_runs, warmup, gpu_id)
+        alpha_d = (coloc_v - bl_v) / bl_v if bl_v and bl_v > 0 else None
 
-            if "victim" not in coloc or "aggressor" not in coloc:
-                print(f"  FAILED: incomplete results")
-                continue
+        pairs.append({
+            "key": key,
+            "victim_model": v_name, "aggressor_model": a_name,
+            "victim_b": b_v, "victim_s": s_v, "victim_phase": "decode",
+            "aggressor_b": b_a, "aggressor_s": s_a, "aggressor_phase": "prefill",
+            "victim_baseline_ms": round(bl_v, 4) if bl_v else None,
+            "victim_coloc_ms": round(coloc_v, 4),
+            "alpha_d": round(alpha_d, 6) if alpha_d is not None else None,
+        })
+        if alpha_d is not None:
+            print(f"  {key}: α_d={alpha_d:.4f} ({bl_v:.0f}→{coloc_v:.0f} ms)")
 
-            victim_coloc = coloc["victim"]["median_ms"]
-            aggressor_coloc = coloc["aggressor"]["median_ms"]
-
-            alpha_d = (victim_coloc - baseline_victim) / baseline_victim if baseline_victim > 0 else 0
-            alpha_p = ((aggressor_coloc - baseline_aggressor) / baseline_aggressor
-                       if baseline_aggressor and baseline_aggressor > 0 else 0)
-
-            entry = {
-                "key": key,
-                "victim_model": Path(victim_model).name,
-                "aggressor_model": Path(aggressor_model).name,
-                "victim_b": b_v, "victim_s": s_v, "victim_phase": "decode",
-                "aggressor_b": b_a, "aggressor_s": s_a, "aggressor_phase": "prefill",
-                "victim_baseline_ms": round(baseline_victim, 4),
-                "victim_coloc_ms": round(victim_coloc, 4),
-                "aggressor_baseline_ms": round(baseline_aggressor, 4) if baseline_aggressor else None,
-                "aggressor_coloc_ms": round(aggressor_coloc, 4),
-                "alpha_d": round(alpha_d, 6),
-                "alpha_p": round(alpha_p, 6),
-            }
-            results.append(entry)
-            done_keys.add(key)
-            _save(output_path, results)
-            print(f"  α_d={alpha_d:.4f}  α_p={alpha_p:.4f}  "
-                  f"(victim: {baseline_victim:.0f}→{victim_coloc:.0f}ms, "
-                  f"aggressor: {baseline_aggressor:.0f}→{aggressor_coloc:.0f}ms)")
-
-    print(f"\nDone. {len([r for r in results if r.get('alpha_d') is not None])} pairs saved to {output_path}")
+    data["pairs"] = pairs
+    _save(output_path, data)
+    n_valid = sum(1 for p in pairs if p.get("alpha_d") is not None)
+    print(f"\nDone. {n_valid} valid pairs → {output_path}")
 
 
 # ── CLI ──────────────────────────────────────────────
 
 def main():
-    parser = argparse.ArgumentParser(description="共置干扰实验")
-    parser.add_argument("--victim", required=True, help="Victim 模型路径 (decode)")
-    parser.add_argument("--aggressor", required=True, help="Aggressor 模型路径 (prefill)")
+    parser = argparse.ArgumentParser(description="共置干扰实验 (双 vLLM 引擎)")
+    parser.add_argument("--victim", required=True, help="Victim 模型路径")
+    parser.add_argument("--aggressor", required=True, help="Aggressor 模型路径")
     parser.add_argument("--gpu", type=int, default=0, help="GPU ID")
     parser.add_argument("--output", default=str(OUTPUT_DIR / "colocation.json"))
     parser.add_argument("--batch_sizes", type=int, nargs="+", default=None)
@@ -307,5 +321,4 @@ def main():
 
 
 if __name__ == "__main__":
-    mp.set_start_method("spawn", force=True)
     main()

@@ -24,51 +24,54 @@ def _find_mlwd_entry(mlwd_data, b, s, phase):
     return mlwd_data.get(key)
 
 
-def build_calibration_data(colocation_data, victim_mlwd, aggressor_mlwd):
-    """从共置实验数据构建 OLS 训练矩阵。"""
-    X_d, y_d = [], []  # α_d 样本
-    X_p, y_p = [], []  # α_p 样本
+def build_calibration_data(colocation_data, mlwd_files):
+    """从共置实验数据构建 OLS 训练矩阵。
+
+    mlwd_files: {"model_name": {mlwd_data}} 字典，自动按 victim_model/aggressor_model 匹配。
+    """
+    X_d, y_d = [], []
 
     for sample in colocation_data:
         if sample.get("alpha_d") is None:
             continue
 
-        v_entry = _find_mlwd_entry(victim_mlwd,
+        # 查找匹配的 MLWD 数据
+        v_mlwd = mlwd_files.get(sample.get("victim_model"))
+        a_mlwd = mlwd_files.get(sample.get("aggressor_model"))
+        if v_mlwd is None or a_mlwd is None:
+            continue
+
+        v_entry = _find_mlwd_entry(v_mlwd,
                                     sample["victim_b"], sample["victim_s"],
                                     sample["victim_phase"])
-        a_entry = _find_mlwd_entry(aggressor_mlwd,
+        a_entry = _find_mlwd_entry(a_mlwd,
                                     sample["aggressor_b"], sample["aggressor_s"],
                                     sample["aggressor_phase"])
         if v_entry is None or a_entry is None:
             continue
 
-        # α_d: aggressor 对 victim 的干扰
         row_d = build_feature_row(v_entry, a_entry)
         X_d.append(row_d)
         y_d.append(sample["alpha_d"])
 
-        # α_p: victim 对 aggressor 的干扰（角色互换）
-        if sample.get("alpha_p") is not None:
-            row_p = build_feature_row(a_entry, v_entry)
-            X_p.append(row_p)
-            y_p.append(sample["alpha_p"])
-
     return (np.array(X_d) if X_d else np.empty((0, 6)),
-            np.array(y_d) if y_d else np.empty(0),
-            np.array(X_p) if X_p else np.empty((0, 6)),
-            np.array(y_p) if y_p else np.empty(0))
+            np.array(y_d) if y_d else np.empty(0))
 
 
-def evaluate_weights(weights, colocation_data, victim_mlwd, aggressor_mlwd):
+def evaluate_weights(weights, colocation_data, mlwd_files):
     """评估标定权重的预测精度。"""
-    errors_d, errors_p = [], []
+    errors_d = []
 
     for sample in colocation_data:
         if sample.get("alpha_d") is None:
             continue
-        v = _find_mlwd_entry(victim_mlwd, sample["victim_b"],
+        v_mlwd = mlwd_files.get(sample.get("victim_model"))
+        a_mlwd = mlwd_files.get(sample.get("aggressor_model"))
+        if v_mlwd is None or a_mlwd is None:
+            continue
+        v = _find_mlwd_entry(v_mlwd, sample["victim_b"],
                               sample["victim_s"], sample["victim_phase"])
-        a = _find_mlwd_entry(aggressor_mlwd, sample["aggressor_b"],
+        a = _find_mlwd_entry(a_mlwd, sample["aggressor_b"],
                               sample["aggressor_s"], sample["aggressor_phase"])
         if v is None or a is None:
             continue
@@ -78,66 +81,57 @@ def evaluate_weights(weights, colocation_data, victim_mlwd, aggressor_mlwd):
         if true_d != 0:
             errors_d.append(abs(pred_d - true_d) / abs(true_d))
 
-        if sample.get("alpha_p") is not None:
-            pred_p = estimate_alpha_p(a, v, weights)
-            true_p = sample["alpha_p"]
-            if true_p != 0:
-                errors_p.append(abs(pred_p - true_p) / abs(true_p))
-
     return {
         "mape_alpha_d": round(np.mean(errors_d) * 100, 2) if errors_d else None,
-        "mape_alpha_p": round(np.mean(errors_p) * 100, 2) if errors_p else None,
-        "mae_alpha_d": round(np.mean([abs(e) for e in errors_d]), 4) if errors_d else None,
-        "n_samples_d": len(errors_d),
-        "n_samples_p": len(errors_p),
+        "n_samples": len(errors_d),
     }
 
 
 def main():
     parser = argparse.ArgumentParser(description="OLS 标定干扰系数权重")
-    parser.add_argument("--colocation", required=True, help="共置实验数据")
-    parser.add_argument("--victim-mlwd", required=True, help="Victim MLWD JSON")
-    parser.add_argument("--aggressor-mlwd", required=True, help="Aggressor MLWD JSON")
+    parser.add_argument("--colocation", required=True, help="共置实验数据 JSON")
+    parser.add_argument("--mlwd", nargs="+", required=True,
+                        help="MLWD JSON 文件（可多个，按模型名自动匹配）")
     parser.add_argument("--output", default=None, help="输出权重 JSON")
     args = parser.parse_args()
 
     with open(args.colocation) as f:
         coloc = json.load(f)
-    with open(args.victim_mlwd) as f:
-        v_mlwd = json.load(f)
-    with open(args.aggressor_mlwd) as f:
-        a_mlwd = json.load(f)
+
+    # 加载所有 MLWD 文件，key 为文件名 stem
+    mlwd_files = {}
+    for p in args.mlwd:
+        name = Path(p).stem
+        with open(p) as f:
+            mlwd_files[name] = json.load(f)
+    print(f"MLWD files: {list(mlwd_files.keys())}")
 
     print(f"Loaded {len(coloc)} co-location samples")
 
-    X_d, y_d, X_p, y_p = build_calibration_data(coloc, v_mlwd, a_mlwd)
-    print(f"Feature matrix: α_d {X_d.shape}, α_p {X_p.shape}")
+    X_d, y_d = build_calibration_data(coloc, mlwd_files)
+    print(f"Feature matrix: {X_d.shape}")
 
-    if len(X_d) == 0 and len(X_p) == 0:
+    if len(X_d) == 0:
         print("No valid samples for calibration!")
         return
 
-    # 联合标定
-    X = np.vstack([x for x in [X_d, X_p] if len(x) > 0])
-    y = np.concatenate([v for v in [y_d, y_p] if len(v) > 0])
-    weights = calibrate_weights(X, y)
+    weights = calibrate_weights(X_d, y_d)
 
-    print(f"\nCalibrated weights ({len(y)} samples):")
+    print(f"\nCalibrated weights ({len(y_d)} samples):")
     for k, v in weights.items():
         default = DEFAULT_WEIGHTS.get(k, 0)
         print(f"  {k}: {v:+.6f}  (default: {default:.2f})")
 
-    # 评估
-    metrics_cal = evaluate_weights(weights, coloc, v_mlwd, a_mlwd)
-    metrics_def = evaluate_weights(DEFAULT_WEIGHTS, coloc, v_mlwd, a_mlwd)
-    print(f"\nCalibrated:  MAPE(α_d)={metrics_cal['mape_alpha_d']}%  MAPE(α_p)={metrics_cal['mape_alpha_p']}%")
-    print(f"Default:     MAPE(α_d)={metrics_def['mape_alpha_d']}%  MAPE(α_p)={metrics_def['mape_alpha_p']}%")
+    metrics_cal = evaluate_weights(weights, coloc, mlwd_files)
+    metrics_def = evaluate_weights(DEFAULT_WEIGHTS, coloc, mlwd_files)
+    print(f"\nCalibrated:  MAPE(α_d)={metrics_cal['mape_alpha_d']}%  (n={metrics_cal['n_samples']})")
+    print(f"Default:     MAPE(α_d)={metrics_def['mape_alpha_d']}%  (n={metrics_def['n_samples']})")
 
     result = {
         "weights": weights,
         "metrics_calibrated": metrics_cal,
         "metrics_default": metrics_def,
-        "n_samples": len(y),
+        "n_samples": len(y_d),
     }
 
     if args.output:
