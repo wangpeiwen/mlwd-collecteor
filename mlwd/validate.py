@@ -16,7 +16,8 @@ def main():
     ok = True
 
     # 完整性
-    required = ["baseline_ms", "sigma_bs", "sigma_cu", "sigma_l2", "sigma_bw", "t_ffn", "g_launch", "r_ffn"]
+    required = ["baseline_ms", "sigma_bs", "sigma_cu", "sigma_l2", "sigma_bw",
+                 "t_ffn", "g_launch", "r_ffn", "l2_attn", "l2_ffn", "ipc"]
     print("=== 完整性 ===")
     for key, val in data.items():
         missing = [f for f in required if val.get(f) is None]
@@ -35,6 +36,13 @@ def main():
         ra, rf = val.get("r_attn", 0) or 0, val.get("r_ffn", 0) or 0
         if ra + rf > 1.01:
             print(f"  {key}: r_attn+r_ffn={ra+rf} > 1"); ok = False
+        for f in ["l2_attn", "l2_ffn"]:
+            v = val.get(f)
+            if v is not None and not (0 <= v <= 1.0):
+                print(f"  {key}: {f}={v} 不在 [0,1]"); ok = False
+        ipc = val.get("ipc")
+        if ipc is not None and not (0 < ipc <= 4.0):
+            print(f"  {key}: ipc={ipc} 不在 (0,4]"); ok = False
     print("  OK\n" if ok else "")
 
     # 趋势

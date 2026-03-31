@@ -2,7 +2,8 @@
 
 import argparse, json, os
 from pathlib import Path
-from .config import DEFAULT_BATCH_SIZES, DEFAULT_SEQ_LENGTHS
+from .config import DEFAULT_BATCH_SIZES, DEFAULT_SEQ_LENGTHS, Experiment, get_model_params
+from .estimate_missing import patch_entry
 
 NSYS_FIELDS = ["t_attn", "t_attn_std", "t_ffn", "t_ffn_std",
                "g_launch", "r_attn", "r_ffn", "f_switch"]
@@ -17,6 +18,7 @@ def _load(path):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--dir", default="output", help="数据目录")
+    parser.add_argument("--model", default=Experiment.model, help="模型路径或标识")
     args = parser.parse_args()
     d = Path(args.dir)
 
@@ -59,10 +61,18 @@ def main():
                         if f in ci[ci_key] and ci[ci_key][f] is not None:
                             entry[f] = ci[ci_key][f]
 
+                # 理论估算 l2_attn, l2_ffn, ipc
+                try:
+                    mp = get_model_params(args.model)
+                    patch_entry(entry, mp)
+                except ValueError:
+                    pass
+
                 has_sens = all(entry.get(f"sigma_{d}") is not None for d in ["bs","cu","l2","bw"])
                 has_nsys = entry.get("t_ffn") is not None
                 has_ci = entry.get("ci_ffn") is not None
-                entry["complete"] = has_sens and has_nsys and has_ci
+                has_est = entry.get("l2_ffn") is not None and entry.get("ipc") is not None
+                entry["complete"] = has_sens and has_nsys and has_ci and has_est
 
                 complete[key] = entry
 

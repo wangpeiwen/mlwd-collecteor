@@ -53,6 +53,8 @@ def get_model_params(model_path: str) -> dict:
 DEFAULT_MODEL = "/data/Qwen/Qwen2.5-7B-Instruct"
 DEFAULT_BATCH_SIZES = [1, 4]
 DEFAULT_SEQ_LENGTHS = [32, 64, 128]
+FULL_BATCH_SIZES = [1, 4, 16]
+FULL_SEQ_LENGTHS = [32, 64, 128, 512, 2048]
 OUTPUT_DIR = Path("output")
 LIB_PATH = Path("build/cuda/libstress_interface.so")
 

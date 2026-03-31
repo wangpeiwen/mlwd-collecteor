@@ -1,0 +1,21 @@
+\begin{table}[htbp]
+\centering
+\caption{迁移阈值敏感性分析}
+\label{tab:threshold-sensitivity}
+\small
+\renewcommand{\arraystretch}{1.2}
+\setlength{\tabcolsep}{6pt}
+\begin{tabular}{lccc}
+\toprule
+参数组合 & Goodput (req/s) & SLO 达标率 (\%) & 迁移次数/min \\
+\midrule
+$\theta_{\mathrm{ceil}}=0.2$ & 11.28 & 95.8 & 12.4 \\
+$\theta_{\mathrm{ceil}}=0.3$（默认） & 11.43 & 95.4 & 8.0 \\
+$\theta_{\mathrm{ceil}}=0.5$ & 11.18 & 93.6 & 4.2 \\
+\midrule
+$\theta_{\mathrm{floor}}=0.3$ & 11.36 & 95.2 & 9.6 \\
+$\theta_{\mathrm{floor}}=0.4$（默认） & 11.43 & 95.4 & 8.0 \\
+$\theta_{\mathrm{floor}}=0.6$ & 11.21 & 94.8 & 5.1 \\
+\bottomrule
+\end{tabular}
+\end{table}
