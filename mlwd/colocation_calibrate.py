@@ -27,7 +27,8 @@ def _find_mlwd_entry(mlwd_data, b, s, phase):
 def build_calibration_data(colocation_data, mlwd_files):
     """从共置实验数据构建 OLS 训练矩阵。
 
-    mlwd_files: {"model_name": {mlwd_data}} 字典，自动按 victim_model/aggressor_model 匹配。
+    mlwd_files: {"model_name": {mlwd_data}} 字典。
+    同模型 PD 共置时，victim 和 aggressor 来自同一个 MLWD 文件。
     """
     X_d, y_d = [], []
 
@@ -35,9 +36,19 @@ def build_calibration_data(colocation_data, mlwd_files):
         if sample.get("alpha_d") is None:
             continue
 
-        # 查找匹配的 MLWD 数据
-        v_mlwd = mlwd_files.get(sample.get("victim_model"))
-        a_mlwd = mlwd_files.get(sample.get("aggressor_model"))
+        # 同模型场景：model 字段；跨模型场景：victim_model/aggressor_model 字段
+        model_name = sample.get("model") or sample.get("victim_model")
+        aggressor_model = sample.get("model") or sample.get("aggressor_model")
+
+        v_mlwd = mlwd_files.get(model_name)
+        a_mlwd = mlwd_files.get(aggressor_model)
+        if v_mlwd is None or a_mlwd is None:
+            # 尝试模糊匹配（文件名 stem 可能不完全一致）
+            for k, v in mlwd_files.items():
+                if model_name and k.lower().replace("-", "") in model_name.lower().replace("-", ""):
+                    v_mlwd = v
+                if aggressor_model and k.lower().replace("-", "") in aggressor_model.lower().replace("-", ""):
+                    a_mlwd = v
         if v_mlwd is None or a_mlwd is None:
             continue
 
@@ -65,10 +76,20 @@ def evaluate_weights(weights, colocation_data, mlwd_files):
     for sample in colocation_data:
         if sample.get("alpha_d") is None:
             continue
-        v_mlwd = mlwd_files.get(sample.get("victim_model"))
-        a_mlwd = mlwd_files.get(sample.get("aggressor_model"))
+        model_name = sample.get("model") or sample.get("victim_model")
+        aggressor_model = sample.get("model") or sample.get("aggressor_model")
+
+        v_mlwd = mlwd_files.get(model_name)
+        a_mlwd = mlwd_files.get(aggressor_model)
+        if v_mlwd is None or a_mlwd is None:
+            for k, v in mlwd_files.items():
+                if model_name and k.lower().replace("-", "") in model_name.lower().replace("-", ""):
+                    v_mlwd = v
+                if aggressor_model and k.lower().replace("-", "") in aggressor_model.lower().replace("-", ""):
+                    a_mlwd = v
         if v_mlwd is None or a_mlwd is None:
             continue
+
         v = _find_mlwd_entry(v_mlwd, sample["victim_b"],
                               sample["victim_s"], sample["victim_phase"])
         a = _find_mlwd_entry(a_mlwd, sample["aggressor_b"],
