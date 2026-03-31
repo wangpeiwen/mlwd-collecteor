@@ -18,10 +18,10 @@ from itertools import product
 from pathlib import Path
 import numpy as np
 
-# 默认权重：CU 和 BW 为 LLM 推理主要竞争维度
+# 标定权重（基于 Qwen-2.5-7B + Llama-3.2-3B 同模型 PD 共置实验，19 样本 OLS）
 DEFAULT_WEIGHTS = {
-    "w_bs": 0.15, "w_cu": 0.25, "w_l2": 0.20,
-    "w_bw": 0.25, "w_ipc": 0.10, "w_overlap": 0.05,
+    "w_bs": 58.878, "w_cu": 0.023, "w_l2": 2.155,
+    "w_bw": -0.919, "w_ipc": -1.085, "w_overlap": -0.888,
 }
 DIMS = ["bs", "cu", "l2", "bw"]
 
@@ -55,36 +55,38 @@ def compute_overlap(entry_r, entry_u):
 
 # ── 逐对干扰系数 ──────────────────────────────────────────────
 
-def estimate_alpha_d(victim, aggressor, weights=None):
+def estimate_alpha_d(victim, aggressor, weights=None, max_tokens=32):
     """Decode 干扰系数：aggressor (prefill r) 对 victim (decode u) 的干扰。
 
-    α_d(u, r) = Σ w_dim · σ_dim(u) · A_dim(r) + w_ipc · IPC(r) · σ_cu(u) + w_overlap · Ω
+    α_d(u, r) = prefill_ratio · [Σ w_dim · σ_dim(u) · A_dim(r) + w_ipc · IPC(r) · σ_cu(u) + w_overlap · Ω]
     """
     w = weights or DEFAULT_WEIGHTS
     A = compute_aggressor_strength(aggressor)
     omega = compute_overlap(aggressor, victim)
+    prefill_ratio = 1.0 / max(max_tokens, 1)
     alpha = 0.0
     for dim in DIMS:
         alpha += w[f"w_{dim}"] * victim.get(f"sigma_{dim}", 0) * A[f"A_{dim}"]
     alpha += w["w_ipc"] * aggressor.get("ipc", 0) * victim.get("sigma_cu", 0)
     alpha += w["w_overlap"] * omega
-    return alpha
+    return alpha * prefill_ratio
 
 
-def estimate_alpha_p(prefill, decode, weights=None):
+def estimate_alpha_p(prefill, decode, weights=None, max_tokens=32):
     """Prefill 干扰系数：decode (u) 对 prefill (r) 的干扰。
 
-    α_p(r, u) = Σ w_dim · σ_dim(r) · A_dim(u) + w_ipc · IPC(u) · σ_cu(r) + w_overlap · Ω
+    α_p(r, u) = prefill_ratio · [Σ w_dim · σ_dim(r) · A_dim(u) + w_ipc · IPC(u) · σ_cu(r) + w_overlap · Ω]
     """
     w = weights or DEFAULT_WEIGHTS
     A = compute_aggressor_strength(decode)
     omega = compute_overlap(decode, prefill)
+    prefill_ratio = 1.0 / max(max_tokens, 1)
     alpha = 0.0
     for dim in DIMS:
         alpha += w[f"w_{dim}"] * prefill.get(f"sigma_{dim}", 0) * A[f"A_{dim}"]
     alpha += w["w_ipc"] * decode.get("ipc", 0) * prefill.get("sigma_cu", 0)
     alpha += w["w_overlap"] * omega
-    return alpha
+    return alpha * prefill_ratio
 
 
 # ── 节点级聚合 ──────────────────────────────────────────────
@@ -129,16 +131,22 @@ def estimate_alpha_p_node(new_request, node_agg, weights=None):
 
 # ── OLS 标定 ──────────────────────────────────────────────
 
-def build_feature_row(victim, aggressor):
-    """构建单个 (victim, aggressor) 对的 6 维特征行。"""
+def build_feature_row(victim, aggressor, max_tokens=32):
+    """构建单个 (victim, aggressor) 对的 6 维特征行。
+
+    在同模型 PD 共置场景中，Prefill 只在第一个 iteration 执行，
+    干扰被稀释到 max_tokens 个 decode step 中。
+    prefill_ratio = 1/max_tokens 用于校正特征量级。
+    """
     A = compute_aggressor_strength(aggressor)
     omega = compute_overlap(aggressor, victim)
+    prefill_ratio = 1.0 / max(max_tokens, 1)
     return [
-        victim.get(f"sigma_{dim}", 0) * A[f"A_{dim}"]
+        victim.get(f"sigma_{dim}", 0) * A[f"A_{dim}"] * prefill_ratio
         for dim in DIMS
     ] + [
-        aggressor.get("ipc", 0) * victim.get("sigma_cu", 0),
-        omega,
+        aggressor.get("ipc", 0) * victim.get("sigma_cu", 0) * prefill_ratio,
+        omega * prefill_ratio,
     ]
 
 

@@ -1,0 +1,19 @@
+{
+  "weights": {
+    "w_bs": 58.878378,
+    "w_cu": 0.022904,
+    "w_l2": 2.155066,
+    "w_bw": -0.919133,
+    "w_ipc": -1.084939,
+    "w_overlap": -0.888368
+  },
+  "metrics_calibrated": {
+    "mape_alpha_d": 278.48,
+    "n_samples": 19
+  },
+  "metrics_default": {
+    "mape_alpha_d": 213.2,
+    "n_samples": 19
+  },
+  "n_samples": 19
+}

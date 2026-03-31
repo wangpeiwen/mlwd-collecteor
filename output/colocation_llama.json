@@ -1,0 +1,305 @@
+{
+  "baselines": {
+    "b1": {
+      "batch_size": 1,
+      "median_ms": 2042.1949913725257,
+      "all_ms": [
+        1876.101671718061,
+        1887.13114336133,
+        2042.1949913725257,
+        2117.5127839669585,
+        2920.572327449918
+      ]
+    },
+    "b4": {
+      "batch_size": 4,
+      "median_ms": 2192.2963801771402,
+      "all_ms": [
+        1359.5242388546467,
+        2127.2066812962294,
+        2192.2963801771402,
+        2200.6140472367406,
+        2209.4443505629897
+      ]
+    }
+  },
+  "model": "Llama-3.2-3B-Instruct",
+  "pairs": [
+    {
+      "key": "d1_p1x32",
+      "model": "Llama-3.2-3B-Instruct",
+      "decode_batch": 1,
+      "prefill_batch": 1,
+      "prefill_seq": 32,
+      "victim_phase": "decode",
+      "aggressor_phase": "prefill",
+      "victim_b": 1,
+      "victim_s": 32,
+      "aggressor_b": 1,
+      "aggressor_s": 32,
+      "baseline_ms": 2042.195,
+      "coloc_ms": 2141.6152,
+      "alpha_d": 0.048683,
+      "all_ms": [
+        1323.7946415320039,
+        2134.9212247878313,
+        2141.6152492165565,
+        2199.9305058270693,
+        2262.0708448812366
+      ]
+    },
+    {
+      "key": "d1_p1x64",
+      "model": "Llama-3.2-3B-Instruct",
+      "decode_batch": 1,
+      "prefill_batch": 1,
+      "prefill_seq": 64,
+      "victim_phase": "decode",
+      "aggressor_phase": "prefill",
+      "victim_b": 1,
+      "victim_s": 32,
+      "aggressor_b": 1,
+      "aggressor_s": 64,
+      "baseline_ms": 2042.195,
+      "coloc_ms": 2197.6897,
+      "alpha_d": 0.076141,
+      "all_ms": [
+        2091.5772691369057,
+        2191.9497000053525,
+        2197.6897437125444,
+        2200.4577117040753,
+        2201.7416646704078
+      ]
+    },
+    {
+      "key": "d1_p1x128",
+      "model": "Llama-3.2-3B-Instruct",
+      "decode_batch": 1,
+      "prefill_batch": 1,
+      "prefill_seq": 128,
+      "victim_phase": "decode",
+      "aggressor_phase": "prefill",
+      "victim_b": 1,
+      "victim_s": 32,
+      "aggressor_b": 1,
+      "aggressor_s": 128,
+      "baseline_ms": 2042.195,
+      "coloc_ms": 2201.408,
+      "alpha_d": 0.077962,
+      "all_ms": [
+        2135.611053556204,
+        2139.1215715557337,
+        2201.4080369845033,
+        2201.911401003599,
+        2257.5020538643003
+      ]
+    },
+    {
+      "key": "d1_p4x32",
+      "model": "Llama-3.2-3B-Instruct",
+      "decode_batch": 1,
+      "prefill_batch": 4,
+      "prefill_seq": 32,
+      "victim_phase": "decode",
+      "aggressor_phase": "prefill",
+      "victim_b": 1,
+      "victim_s": 32,
+      "aggressor_b": 4,
+      "aggressor_s": 32,
+      "baseline_ms": 2042.195,
+      "coloc_ms": 2233.323,
+      "alpha_d": 0.09359,
+      "all_ms": [
+        2203.63134611398,
+        2216.078861616552,
+        2233.323018066585,
+        2265.8128356561065,
+        2284.2035917565227
+      ]
+    },
+    {
+      "key": "d1_p4x64",
+      "model": "Llama-3.2-3B-Instruct",
+      "decode_batch": 1,
+      "prefill_batch": 4,
+      "prefill_seq": 64,
+      "victim_phase": "decode",
+      "aggressor_phase": "prefill",
+      "victim_b": 1,
+      "victim_s": 32,
+      "aggressor_b": 4,
+      "aggressor_s": 64,
+      "baseline_ms": 2042.195,
+      "coloc_ms": 2204.4409,
+      "alpha_d": 0.079447,
+      "all_ms": [
+        2199.7485691681504,
+        2201.2981669977307,
+        2204.440896399319,
+        2214.6547762677073,
+        2267.1257006004453
+      ]
+    },
+    {
+      "key": "d1_p4x128",
+      "model": "Llama-3.2-3B-Instruct",
+      "decode_batch": 1,
+      "prefill_batch": 4,
+      "prefill_seq": 128,
+      "victim_phase": "decode",
+      "aggressor_phase": "prefill",
+      "victim_b": 1,
+      "victim_s": 32,
+      "aggressor_b": 4,
+      "aggressor_s": 128,
+      "baseline_ms": 2042.195,
+      "coloc_ms": 2209.09,
+      "alpha_d": 0.081723,
+      "all_ms": [
+        2194.0896064043045,
+        2203.511738218367,
+        2209.0899720788,
+        2224.0779753774405,
+        2266.3623578846455
+      ]
+    },
+    {
+      "key": "d4_p1x32",
+      "model": "Llama-3.2-3B-Instruct",
+      "decode_batch": 4,
+      "prefill_batch": 1,
+      "prefill_seq": 32,
+      "victim_phase": "decode",
+      "aggressor_phase": "prefill",
+      "victim_b": 4,
+      "victim_s": 32,
+      "aggressor_b": 1,
+      "aggressor_s": 32,
+      "baseline_ms": 2192.2964,
+      "coloc_ms": 2205.1987,
+      "alpha_d": 0.005885,
+      "all_ms": [
+        2195.8622662350535,
+        2200.2402245998383,
+        2205.1986642181873,
+        2206.056037917733,
+        2213.9307782053947
+      ]
+    },
+    {
+      "key": "d4_p1x64",
+      "model": "Llama-3.2-3B-Instruct",
+      "decode_batch": 4,
+      "prefill_batch": 1,
+      "prefill_seq": 64,
+      "victim_phase": "decode",
+      "aggressor_phase": "prefill",
+      "victim_b": 4,
+      "victim_s": 32,
+      "aggressor_b": 1,
+      "aggressor_s": 64,
+      "baseline_ms": 2192.2964,
+      "coloc_ms": 2193.9896,
+      "alpha_d": 0.000772,
+      "all_ms": [
+        2135.061458684504,
+        2190.774669870734,
+        2193.9895935356617,
+        2195.122647099197,
+        2195.3100338578224
+      ]
+    },
+    {
+      "key": "d4_p1x128",
+      "model": "Llama-3.2-3B-Instruct",
+      "decode_batch": 4,
+      "prefill_batch": 1,
+      "prefill_seq": 128,
+      "victim_phase": "decode",
+      "aggressor_phase": "prefill",
+      "victim_b": 4,
+      "victim_s": 32,
+      "aggressor_b": 1,
+      "aggressor_s": 128,
+      "baseline_ms": 2192.2964,
+      "coloc_ms": 2217.7014,
+      "alpha_d": 0.011588,
+      "all_ms": [
+        2200.5369756370783,
+        2215.2124401181936,
+        2217.7014192566276,
+        2265.055976808071,
+        2279.6755600720644
+      ]
+    },
+    {
+      "key": "d4_p4x32",
+      "model": "Llama-3.2-3B-Instruct",
+      "decode_batch": 4,
+      "prefill_batch": 4,
+      "prefill_seq": 32,
+      "victim_phase": "decode",
+      "aggressor_phase": "prefill",
+      "victim_b": 4,
+      "victim_s": 32,
+      "aggressor_b": 4,
+      "aggressor_s": 32,
+      "baseline_ms": 2192.2964,
+      "coloc_ms": 2204.2946,
+      "alpha_d": 0.005473,
+      "all_ms": [
+        2186.152902431786,
+        2203.8865853101015,
+        2204.2945502325892,
+        2227.2652480751276,
+        2281.0376500710845
+      ]
+    },
+    {
+      "key": "d4_p4x64",
+      "model": "Llama-3.2-3B-Instruct",
+      "decode_batch": 4,
+      "prefill_batch": 4,
+      "prefill_seq": 64,
+      "victim_phase": "decode",
+      "aggressor_phase": "prefill",
+      "victim_b": 4,
+      "victim_s": 32,
+      "aggressor_b": 4,
+      "aggressor_s": 64,
+      "baseline_ms": 2192.2964,
+      "coloc_ms": 2217.194,
+      "alpha_d": 0.011357,
+      "all_ms": [
+        2199.8502612113953,
+        2212.79504429549,
+        2217.1939751133323,
+        2237.3828180134296,
+        2262.0063414797187
+      ]
+    },
+    {
+      "key": "d4_p4x128",
+      "model": "Llama-3.2-3B-Instruct",
+      "decode_batch": 4,
+      "prefill_batch": 4,
+      "prefill_seq": 128,
+      "victim_phase": "decode",
+      "aggressor_phase": "prefill",
+      "victim_b": 4,
+      "victim_s": 32,
+      "aggressor_b": 4,
+      "aggressor_s": 128,
+      "baseline_ms": 2192.2964,
+      "coloc_ms": 2218.5419,
+      "alpha_d": 0.011972,
+      "all_ms": [
+        2193.331951275468,
+        2212.243248708546,
+        2218.5418773442507,
+        2221.254786476493,
+        2264.0126142650843
+      ]
+    }
+  ]
+}
