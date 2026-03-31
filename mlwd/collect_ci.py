@@ -7,25 +7,23 @@ Usage:
 
 import argparse, json, os, time, glob, gzip
 from itertools import product
-from .config import Experiment, OUTPUT_DIR, QWEN_HIDDEN, QWEN_LAYERS, QWEN_HEADS, QWEN_KV_HEADS, QWEN_HEAD_DIM, QWEN_INTER, V100_BW_GBS
+from .config import Experiment, OUTPUT_DIR, V100_BW_GBS, get_model_params
 from .classifier import classify, Cat
 
 
-def attn_flops(b, s, max_tokens=32):
-    h, d, nh, nkv, L = QWEN_HIDDEN, QWEN_HEAD_DIM, QWEN_HEADS, QWEN_KV_HEADS, QWEN_LAYERS
-    # Prefill
+def attn_flops(b, s, mp, max_tokens=32):
+    h, d, nh, nkv, L = mp["hidden"], mp["head_dim"], mp["heads"], mp["kv_heads"], mp["layers"]
     qkv = 2 * b * s * h * (h + 2 * nkv * d)
     qk = 2 * b * nh * s * s * d
     av = 2 * b * nh * s * s * d
     out = 2 * b * s * h * h
     prefill = (qkv + qk + av + out) * L
-    # Decode (per step seq_len=1)
     decode_per_step = (2*b*1*h*(h+2*nkv*d) + 2*b*nh*1*1*d*2 + 2*b*1*h*h) * L
     return prefill + decode_per_step * max_tokens
 
 
-def ffn_flops(b, s, max_tokens=32):
-    h, inter, L = QWEN_HIDDEN, QWEN_INTER, QWEN_LAYERS
+def ffn_flops(b, s, mp, max_tokens=32):
+    h, inter, L = mp["hidden"], mp["inter"], mp["layers"]
     prefill = 3 * 2 * b * s * h * inter * L
     decode_per_step = 3 * 2 * b * 1 * h * inter * L
     return prefill + decode_per_step * max_tokens
@@ -61,6 +59,9 @@ def main():
     exp = Experiment(model=args.model)
     if args.batch_sizes: exp.batch_sizes = args.batch_sizes
     if args.seq_lengths: exp.seq_lengths = args.seq_lengths
+
+    mp = get_model_params(args.model)
+    print(f"Model params: {mp}")
 
     results = {}
     if os.path.exists(args.output):
@@ -114,8 +115,8 @@ def main():
                 elif cat == Cat.FFN: ffn_time_us += dur
 
         # 理论 FLOPs
-        af = attn_flops(b, s, args.max_tokens)
-        ff = ffn_flops(b, s, args.max_tokens)
+        af = attn_flops(b, s, mp, args.max_tokens)
+        ff = ffn_flops(b, s, mp, args.max_tokens)
         bw = V100_BW_GBS * 1e9  # bytes/s
 
         entry = {"batch_size": b, "seq_len": s,

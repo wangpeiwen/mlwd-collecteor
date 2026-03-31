@@ -1,11 +1,15 @@
 """数据验证。"""
 
-import json
-from .config import OUTPUT_DIR
+import argparse, json
+from pathlib import Path
 
 
 def main():
-    with open(str(OUTPUT_DIR / "mlwd_complete.json")) as f:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dir", default="output", help="数据目录")
+    args = parser.parse_args()
+
+    with open(str(Path(args.dir) / "mlwd_complete.json")) as f:
         data = json.load(f)
 
     print(f"Loaded {len(data)} entries\n")

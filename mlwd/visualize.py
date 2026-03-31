@@ -1,22 +1,51 @@
-"""可视化（中文仿宋/宋体 + Times New Roman）。"""
+"""可视化（中文宋体 + Times New Roman，字体从项目 fonts/ 目录加载）。"""
 
 import argparse, json, os
+from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib
-from matplotlib.font_manager import FontProperties
-from .config import OUTPUT_DIR
+from matplotlib.font_manager import FontProperties, fontManager
+
+# 从项目 fonts/ 目录加载字体，不依赖系统安装
+_FONT_DIR = Path(__file__).parent.parent / "fonts"
+_CN_FONT = None
+_EN_FONT = None
+
+for fname in ["Songti.ttc", "SimSun.ttf", "FangSong.ttf", "STFangsong.ttf"]:
+    fpath = _FONT_DIR / fname
+    if fpath.exists():
+        fontManager.addfont(str(fpath))
+        _CN_FONT = FontProperties(fname=str(fpath))
+        break
+
+for fname in ["Times New Roman.ttf", "TimesNewRoman.ttf"]:
+    fpath = _FONT_DIR / fname
+    if fpath.exists():
+        fontManager.addfont(str(fpath))
+        _EN_FONT = FontProperties(fname=str(fpath))
+        break
+
+# 也注册 Bold 版本
+_bold_path = _FONT_DIR / "Times New Roman Bold.ttf"
+if _bold_path.exists():
+    fontManager.addfont(str(_bold_path))
 
 matplotlib.rcParams['axes.unicode_minus'] = False
 matplotlib.rcParams['mathtext.fontset'] = 'stix'
-for name in ['FangSong', 'STFangsong', 'SimSun', 'STSong', 'Noto Sans CJK SC', 'WenQuanYi Micro Hei']:
-    try:
-        FontProperties(family=name)
-        matplotlib.rcParams['font.sans-serif'] = [name, 'Times New Roman', 'DejaVu Sans']
-        break
-    except Exception:
-        continue
-matplotlib.rcParams['font.serif'] = ['Times New Roman', 'DejaVu Serif']
+
+if _CN_FONT:
+    cn_name = _CN_FONT.get_name()
+    matplotlib.rcParams['font.sans-serif'] = [cn_name, 'Times New Roman', 'DejaVu Sans']
+    print(f"Chinese font: {cn_name} ({_CN_FONT.get_file()})")
+else:
+    matplotlib.rcParams['font.sans-serif'] = ['SimSun', 'FangSong', 'DejaVu Sans']
+    print("Warning: No Chinese font found in fonts/, using fallback")
+
+if _EN_FONT:
+    matplotlib.rcParams['font.serif'] = [_EN_FONT.get_name(), 'DejaVu Serif']
+else:
+    matplotlib.rcParams['font.serif'] = ['Times New Roman', 'DejaVu Serif']
 
 DIMS = ["sigma_bs", "sigma_cu", "sigma_l2", "sigma_bw"]
 DIM_CN = ["线程块\n调度器", "计算\n单元", "L2\n缓存", "显存\n带宽"]

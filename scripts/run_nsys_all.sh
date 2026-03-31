@@ -4,11 +4,13 @@ set -e
 
 NSYS=${NSYS:-/opt/nvidia/nsight-compute/2025.1.1/host/target-linux-x64/nsys}
 MODEL=${MODEL:-/data/Qwen/Qwen2.5-7B-Instruct}
+OUT_DIR=${OUT_DIR:-output/$(basename ${MODEL})}
 TRACE_DIR=/tmp/mlwd_nsys
 BATCH_SIZES=(1 4)
 SEQ_LENGTHS=(32 64 128)
+NSYS_OUTPUT=${OUT_DIR}/nsys.json
 
-mkdir -p ${TRACE_DIR} output
+mkdir -p ${TRACE_DIR} ${OUT_DIR}
 
 for b in "${BATCH_SIZES[@]}"; do
   for s in "${SEQ_LENGTHS[@]}"; do
@@ -24,11 +26,12 @@ for b in "${BATCH_SIZES[@]}"; do
     ${NSYS} export --type sqlite --output ${TRACE_DIR}/${key}.sqlite \
       --force-overwrite true ${TRACE_DIR}/${key}.nsys-rep 2>&1 | tail -2
 
-    PYTHONPATH=. python -m mlwd.collect_nsys --parse ${TRACE_DIR}/${key}.sqlite --key ${key}
+    PYTHONPATH=. python -m mlwd.collect_nsys --parse ${TRACE_DIR}/${key}.sqlite \
+      --key ${key} --output ${NSYS_OUTPUT}
 
     rm -f ${TRACE_DIR}/${key}.nsys-rep
     echo "${key} done."
   done
 done
 
-echo "All nsys done. Results: output/nsys.json"
+echo "All nsys done. Results: ${NSYS_OUTPUT}"

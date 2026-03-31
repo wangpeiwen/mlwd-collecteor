@@ -1,22 +1,54 @@
-"""实验矩阵、硬件参数、压力核参数。"""
+"""实验矩阵、硬件参数、压力核参数、模型结构参数。"""
 
 from dataclasses import dataclass, field
 from itertools import product
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 # V100 硬件参数
 V100_NUM_SMS = 80
 V100_L2_BYTES = 6 * 1024 * 1024
 V100_BW_GBS = 900
 
-# Qwen2.5-7B 模型参数（用于理论 FLOPs 计算）
-QWEN_HIDDEN = 3584
-QWEN_LAYERS = 28
-QWEN_HEADS = 28
-QWEN_KV_HEADS = 4
-QWEN_HEAD_DIM = 128
-QWEN_INTER = 18944
+# 模型结构参数（用于理论 FLOPs 计算）
+MODEL_PARAMS = {
+    "qwen2.5-7b": {
+        "hidden": 3584, "layers": 28, "heads": 28,
+        "kv_heads": 4, "head_dim": 128, "inter": 18944,
+    },
+    "llama-3.2-3b": {
+        "hidden": 3072, "layers": 28, "heads": 24,
+        "kv_heads": 8, "head_dim": 128, "inter": 8192,
+    },
+    "llama-2-7b": {
+        "hidden": 4096, "layers": 32, "heads": 32,
+        "kv_heads": 32, "head_dim": 128, "inter": 11008,
+    },
+}
+
+
+def get_model_params(model_path: str) -> dict:
+    """从模型路径推断模型结构参数。"""
+    path_lower = model_path.lower()
+    for key, params in MODEL_PARAMS.items():
+        if key.replace("-", "").replace(".", "") in path_lower.replace("-", "").replace(".", ""):
+            return params
+    # 未知模型，尝试从 config.json 读取
+    config_path = Path(model_path) / "config.json"
+    if config_path.exists():
+        import json
+        with open(config_path) as f:
+            cfg = json.load(f)
+        return {
+            "hidden": cfg.get("hidden_size", 4096),
+            "layers": cfg.get("num_hidden_layers", 32),
+            "heads": cfg.get("num_attention_heads", 32),
+            "kv_heads": cfg.get("num_key_value_heads", cfg.get("num_attention_heads", 32)),
+            "head_dim": cfg.get("head_dim", 128),
+            "inter": cfg.get("intermediate_size", 11008),
+        }
+    raise ValueError(f"Unknown model: {model_path}. Add to MODEL_PARAMS or provide config.json.")
+
 
 DEFAULT_MODEL = "/data/Qwen/Qwen2.5-7B-Instruct"
 DEFAULT_BATCH_SIZES = [1, 4]

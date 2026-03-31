@@ -1,7 +1,8 @@
 """合并 sensitivity + nsys + ci → mlwd_complete.json"""
 
-import json, os
-from .config import OUTPUT_DIR, DEFAULT_BATCH_SIZES, DEFAULT_SEQ_LENGTHS
+import argparse, json, os
+from pathlib import Path
+from .config import DEFAULT_BATCH_SIZES, DEFAULT_SEQ_LENGTHS
 
 NSYS_FIELDS = ["t_attn", "t_attn_std", "t_ffn", "t_ffn_std",
                "g_launch", "r_attn", "r_ffn", "f_switch"]
@@ -14,9 +15,14 @@ def _load(path):
 
 
 def main():
-    sens = _load(str(OUTPUT_DIR / "sensitivity.json"))
-    nsys = _load(str(OUTPUT_DIR / "nsys.json"))
-    ci = _load(str(OUTPUT_DIR / "ci.json"))
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dir", default="output", help="数据目录")
+    args = parser.parse_args()
+    d = Path(args.dir)
+
+    sens = _load(str(d / "sensitivity.json"))
+    nsys = _load(str(d / "nsys.json"))
+    ci = _load(str(d / "ci.json"))
 
     print(f"Loaded: sensitivity={len(sens)}, nsys={len(nsys)}, ci={len(ci)}")
 
@@ -68,7 +74,7 @@ def main():
         s = "OK" if val["complete"] else "--"
         print(f"  {key:25s} {s}")
 
-    out = str(OUTPUT_DIR / "mlwd_complete.json")
+    out = str(d / "mlwd_complete.json")
     os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
     with open(out, "w") as f:
         json.dump(complete, f, indent=2, ensure_ascii=False)
