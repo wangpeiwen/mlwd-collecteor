@@ -6,6 +6,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib
 from matplotlib.font_manager import FontProperties, fontManager
+from .config import OUTPUT_DIR
 
 # 从项目 fonts/ 目录加载字体，不依赖系统安装
 _FONT_DIR = Path(__file__).parent.parent / "fonts"
