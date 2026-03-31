@@ -39,22 +39,17 @@ from .config import Experiment, OUTPUT_DIR, DEFAULT_BATCH_SIZES, DEFAULT_SEQ_LEN
 # ── 子进程工作函数 ──────────────────────────────────────
 
 def _worker_run(model_path, prompts_data, max_tokens, num_runs, warmup,
-                gpu_id, result_queue, barrier, role):
-    """在子进程中加载模型并运行推理。
-
-    Args:
-        prompts_data: list of (prompt_text, batch_size) 或直接 prompts
-        barrier: 用于同步两个进程同时开始测量
-        role: "victim" 或 "aggressor"
-    """
+                gpu_id, result_queue, barrier, role, max_model_len=2048,
+                gpu_mem_util=0.45):
+    """在子进程中加载模型并运行推理。"""
     os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
-    os.environ["VLLM_USE_V1"] = "0"
 
     from vllm import LLM, SamplingParams
     from transformers import AutoTokenizer
 
     llm = LLM(model=model_path, dtype="float16", trust_remote_code=True,
-              enforce_eager=True, gpu_memory_utilization=0.45)
+              enforce_eager=True, gpu_memory_utilization=gpu_mem_util,
+              max_model_len=max_model_len)
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
 
     sp = SamplingParams(max_tokens=max_tokens, temperature=0)
@@ -97,14 +92,16 @@ def _make_prompts(model_path, seq_len, batch_size):
 
 # ── 单独运行基线 ──────────────────────────────────────
 
-def measure_baseline(model_path, prompts, max_tokens, num_runs, warmup, gpu_id):
+def measure_baseline(model_path, prompts, max_tokens, num_runs, warmup, gpu_id,
+                     max_model_len=2048):
     """单模型单独运行，测量基线时延。"""
     result_queue = mp.Queue()
-    barrier = mp.Barrier(1)  # 单进程不需要同步
+    barrier = mp.Barrier(1)
 
     p = mp.Process(target=_worker_run,
                    args=(model_path, prompts, max_tokens, num_runs, warmup,
-                         gpu_id, result_queue, barrier, "baseline"))
+                         gpu_id, result_queue, barrier, "baseline",
+                         max_model_len, 0.90))
     p.start()
     p.join(timeout=600)
     if p.is_alive():
@@ -119,7 +116,7 @@ def measure_baseline(model_path, prompts, max_tokens, num_runs, warmup, gpu_id):
 
 def measure_colocation(victim_model, victim_prompts, victim_max_tokens,
                        aggressor_model, aggressor_prompts, aggressor_max_tokens,
-                       num_runs, warmup, gpu_id):
+                       num_runs, warmup, gpu_id, max_model_len=2048):
     """两模型同卡共置运行。"""
     result_queue = mp.Queue()
     barrier = mp.Barrier(2)
@@ -127,11 +124,13 @@ def measure_colocation(victim_model, victim_prompts, victim_max_tokens,
     p_victim = mp.Process(
         target=_worker_run,
         args=(victim_model, victim_prompts, victim_max_tokens,
-              num_runs, warmup, gpu_id, result_queue, barrier, "victim"))
+              num_runs, warmup, gpu_id, result_queue, barrier, "victim",
+              max_model_len, 0.45))
     p_aggressor = mp.Process(
         target=_worker_run,
         args=(aggressor_model, aggressor_prompts, aggressor_max_tokens,
-              num_runs, warmup, gpu_id, result_queue, barrier, "aggressor"))
+              num_runs, warmup, gpu_id, result_queue, barrier, "aggressor",
+              max_model_len, 0.45))
 
     p_victim.start()
     p_aggressor.start()
