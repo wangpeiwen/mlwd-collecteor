@@ -78,29 +78,102 @@ def fig1_phase_compare(data, out):
     plt.savefig(os.path.join(out, "fig1_phase_compare.png"), dpi=200); plt.close()
 
 
-def fig2_heatmap(data, out):
-    """敏感度热力图。"""
+def fig2_heatmap(data, out, data2=None, label1="Model A", label2="Model B"):
+    """
+    分面热力图：统一色标的跨模型干扰敏感度对比。
+
+    如果 data2 不为 None，生成双模型分面图（共享 colorbar）。
+    否则生成单模型热力图。
+    """
     order = [f"b{b}_s{s}_{p}" for p in ["prefill","decode"] for b in [1,4] for s in [32,64,128]]
-    matrix, labels = [], []
-    for k in order:
-        if k in data:
-            matrix.append([data[k].get(d, 0) or 0 for d in DIMS])
-            d = data[k]; labels.append(f"b={d['batch_size']}, s={d['seq_len']}, {d['phase']}")
-    matrix = np.array(matrix)
-    fig, ax = plt.subplots(figsize=(8, 8))
-    im = ax.imshow(matrix, cmap="RdYlBu_r", aspect="auto", vmin=0)
-    ax.set_xticks(range(4)); ax.set_xticklabels(["线程块调度器","计算单元","L2 缓存","显存带宽"], fontsize=10)
-    ax.set_yticks(range(len(labels))); ax.set_yticklabels(labels, fontsize=9)
-    n_p = sum(1 for k in order if "prefill" in k and k in data)
-    ax.axhline(y=n_p-0.5, color='black', linewidth=2)
-    for i in range(len(labels)):
-        for j in range(4):
-            v = matrix[i,j]; c = "white" if v > matrix.max()*0.65 else "black"
-            ax.text(j, i, f"{v:.2f}", ha="center", va="center", fontsize=9, color=c)
-    plt.colorbar(im, ax=ax, label="干扰敏感度 ($\\sigma$)", shrink=0.8)
-    ax.set_title("MLWD 干扰敏感度画像", fontsize=13, fontweight='bold')
-    plt.tight_layout()
-    plt.savefig(os.path.join(out, "fig2_heatmap.png"), dpi=200); plt.close()
+    xlabels = ["线程块调度器", "计算单元", "L2 缓存", "显存带宽"]
+
+    def _build_matrix(d):
+        matrix, labels = [], []
+        for k in order:
+            if k in d:
+                matrix.append([d[k].get(dim, 0) or 0 for dim in DIMS])
+                e = d[k]
+                labels.append(f"b={e['batch_size']}, s={e['seq_len']}, {e['phase']}")
+        return np.array(matrix), labels
+
+    m1, y1 = _build_matrix(data)
+
+    if data2 is not None:
+        m2, y2 = _build_matrix(data2)
+        # 统一色标范围
+        vmax = max(m1.max(), m2.max()) * 1.02
+        vmin = 0
+        # σ=1 为中心的 diverging colormap
+        from matplotlib.colors import TwoSlopeNorm
+        norm = TwoSlopeNorm(vmin=vmin, vcenter=1.0, vmax=vmax)
+
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 8),
+                                        gridspec_kw={"wspace": 0.05, "width_ratios": [1, 1]})
+
+        for ax, matrix, ylabels, title in [(ax1, m1, y1, f"(a) {label1}"),
+                                            (ax2, m2, y2, f"(b) {label2}")]:
+            im = ax.imshow(matrix, cmap="RdBu_r", aspect="auto", norm=norm)
+            ax.set_xticks(range(4))
+            ax.set_xticklabels(xlabels, fontsize=10)
+            ax.set_yticks(range(len(ylabels)))
+            if ax == ax1:
+                ax.set_yticklabels(ylabels, fontsize=9)
+            else:
+                ax.set_yticklabels([])  # 右图不重复 y 轴标签
+
+            # prefill/decode 分割线
+            n_p = sum(1 for k in order if "prefill" in k and k in (data if ax == ax1 else data2))
+            ax.axhline(y=n_p - 0.5, color='black', linewidth=2.5, alpha=0.8)
+
+            # 数值标注
+            for i in range(matrix.shape[0]):
+                for j in range(matrix.shape[1]):
+                    v = matrix[i, j]
+                    c = "white" if abs(v - 1.0) > 0.6 else "black"
+                    ax.text(j, i, f"{v:.2f}", ha="center", va="center", fontsize=8, color=c)
+
+            ax.set_title(title, fontsize=12, fontweight='bold', pad=8)
+
+        # 共享 colorbar
+        cbar = fig.colorbar(im, ax=[ax1, ax2], shrink=0.75, pad=0.02)
+        cbar.set_label("干扰敏感度 ($\\sigma$)", fontsize=11)
+
+        fig.suptitle("Interference Sensitivity Comparison Across Hardware Resources",
+                     fontsize=14, fontweight='bold', y=0.98)
+        plt.savefig(os.path.join(out, "fig2_heatmap_compare.png"), dpi=200, bbox_inches='tight')
+        plt.close()
+        print("  fig2_heatmap_compare.png")
+
+    else:
+        # 单模型热力图
+        from matplotlib.colors import TwoSlopeNorm
+        vmax = m1.max() * 1.02
+        norm = TwoSlopeNorm(vmin=0, vcenter=1.0, vmax=vmax)
+
+        fig, ax = plt.subplots(figsize=(8, 8))
+        im = ax.imshow(m1, cmap="RdBu_r", aspect="auto", norm=norm)
+        ax.set_xticks(range(4))
+        ax.set_xticklabels(xlabels, fontsize=10)
+        ax.set_yticks(range(len(y1)))
+        ax.set_yticklabels(y1, fontsize=9)
+
+        n_p = sum(1 for k in order if "prefill" in k and k in data)
+        ax.axhline(y=n_p - 0.5, color='black', linewidth=2.5, alpha=0.8)
+
+        for i in range(m1.shape[0]):
+            for j in range(m1.shape[1]):
+                v = m1[i, j]
+                c = "white" if abs(v - 1.0) > 0.6 else "black"
+                ax.text(j, i, f"{v:.2f}", ha="center", va="center", fontsize=9, color=c)
+
+        cbar = plt.colorbar(im, ax=ax, shrink=0.8)
+        cbar.set_label("干扰敏感度 ($\\sigma$)", fontsize=11)
+        ax.set_title(f"MLWD 干扰敏感度画像 — {label1}", fontsize=13, fontweight='bold')
+        plt.tight_layout()
+        plt.savefig(os.path.join(out, "fig2_heatmap.png"), dpi=200)
+        plt.close()
+        print("  fig2_heatmap.png")
 
 
 def fig3_trends(data, out):
