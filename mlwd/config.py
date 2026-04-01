@@ -24,6 +24,14 @@ MODEL_PARAMS = {
         "hidden": 4096, "layers": 32, "heads": 32,
         "kv_heads": 32, "head_dim": 128, "inter": 11008,
     },
+    "qwen2.5-14b": {
+        "hidden": 5120, "layers": 48, "heads": 40,
+        "kv_heads": 8, "head_dim": 128, "inter": 13824,
+    },
+    "llama-3.3-70b": {
+        "hidden": 8192, "layers": 80, "heads": 64,
+        "kv_heads": 8, "head_dim": 128, "inter": 28672,
+    },
 }
 
 
